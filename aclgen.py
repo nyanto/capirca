@@ -41,6 +41,7 @@ from lib import brocade
 from lib import cisco
 from lib import ciscoasa
 from lib import ciscoxr
+from lib import cisconx
 from lib import iptables
 from lib import ipset
 from lib import speedway
@@ -133,6 +134,8 @@ def render_filters(source_file, definitions_obj, shade_check, exp_info):
       asa = copy.deepcopy(pol)
     if 'ciscoxr' in header.platforms:
       xacl = copy.deepcopy(pol)
+    if 'cisconx' in header.platforms:
+      nacl = copy.deepcopy(pol)
     if 'iptables' in header.platforms:
       ipt = copy.deepcopy(pol)
     if 'ipset' in header.platforms:
@@ -175,6 +178,10 @@ def render_filters(source_file, definitions_obj, shade_check, exp_info):
     count += 1
   if xacl:
     fw = ciscoxr.CiscoXR(xacl, exp_info)
+    do_output_filter(str(fw), filter_name(source_file, fw._SUFFIX))
+    count += 1
+  if nacl:
+    fw = cisconx.CiscoNX(nacl, exp_info)
     do_output_filter(str(fw), filter_name(source_file, fw._SUFFIX))
     count += 1
   if ipt:
