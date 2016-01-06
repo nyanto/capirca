@@ -19,6 +19,7 @@
 """
 
 import datetime
+from functools import wraps
 import os
 import sys
 
@@ -349,17 +350,23 @@ class Term(object):
     self.ether_type = []
     self.traffic_type = []
     self.translated = False
+    # gce specific
+    self.source_tag = []
+    self.destination_tag = []
     # iptables specific
     self.source_interface = None
     self.destination_interface = None
     self.platform = []
     self.platform_exclude = []
     self.timeout = None
-    self.AddObject(obj)
     self.flattened = False
     self.flattened_addr = None
     self.flattened_saddr = None
     self.flattened_daddr = None
+
+    # AddObject touches variables which might not have been initialized
+    # further up so this has to be at the end.
+    self.AddObject(obj)
 
   def __contains__(self, other):
     """Determine if other term is contained in this term."""
@@ -459,6 +466,13 @@ class Term(object):
           other.destination_prefix):
         return False
 
+    # check source and destination tags
+    if self.source_tag:
+      if sorted(self.source_tag != sorted(other.source_tag)):
+        return False
+      if sorted(self.destination_tag != sorted(other.destination_tag)):
+        return False
+
     # check precedence
     if self.precedence:
       if not other.precedence:
@@ -518,11 +532,15 @@ class Term(object):
     if self.source_address_exclude:
       ret_str.append('  source_address_exclude: %s' %
                      self.source_address_exclude)
+    if self.source_tag:
+      ret_str.append('  source_tag: %s' % self.source_tag)
     if self.destination_address:
       ret_str.append('  destination_address: %s' % self.destination_address)
     if self.destination_address_exclude:
       ret_str.append('  destination_address_exclude: %s' %
                      self.destination_address_exclude)
+    if self.destination_tag:
+      ret_str.append('  destination_tag: %s' % self.destination_tag)
     if self.source_prefix:
       ret_str.append('  source_prefix: %s' % self.source_prefix)
     if self.destination_prefix:
@@ -617,6 +635,11 @@ class Term(object):
       return False
 
     if self.destination_interface != other.destination_interface:
+      return False
+
+    # tags
+    if not (sorted(self.source_tag) == sorted(other.source_tag) and
+            sorted(self.destination_tag) == sorted(other.destination_tag)):
       return False
 
     if sorted(self.logging) != sorted(other.logging):
@@ -786,6 +809,10 @@ class Term(object):
           self.platform.append(x.value)
         elif x.var_type is VarType.PLATFORMEXCLUDE:
           self.platform_exclude.append(x.value)
+        elif x.var_type is VarType.STAG:
+          self.source_tag.append(x.value)
+        elif x.var_type is VarType.DTAG:
+          self.destination_tag.append(x.value)
         else:
           raise TermObjectTypeError(
               '%s isn\'t a type I know how to deal with (contains \'%s\')' % (
@@ -1114,6 +1141,8 @@ class VarType(object):
   OWNER = 34
   PRINCIPALS = 35
   ADDREXCLUDE = 36
+  STAG = 44
+  DTAG = 45
 
   def __init__(self, var_type, value):
     self.var_type = var_type
@@ -1225,6 +1254,7 @@ tokens = (
     'DPORT',
     'DINTERFACE',
     'DQUOTEDSTRING',
+    'DTAG',
     'ETHER_TYPE',
     'EXPIRATION',
     'FRAGMENT_OFFSET',
@@ -1251,6 +1281,7 @@ tokens = (
     'SINTERFACE',
     'SPFX',
     'SPORT',
+    'STAG',
     'STRING',
     'TARGET',
     'TERM',
@@ -1273,6 +1304,7 @@ reserved = {
     'destination-interface': 'DINTERFACE',
     'destination-prefix': 'DPFX',
     'destination-port': 'DPORT',
+    'destination-tag': 'DTAG',
     'ether-type': 'ETHER_TYPE',
     'expiration': 'EXPIRATION',
     'fragment-offset': 'FRAGMENT_OFFSET',
@@ -1298,6 +1330,7 @@ reserved = {
     'source-interface': 'SINTERFACE',
     'source-prefix': 'SPFX',
     'source-port': 'SPORT',
+    'source-tag': 'STAG',
     'target': 'TARGET',
     'term': 'TERM',
     'timeout': 'TIMEOUT',
@@ -1337,7 +1370,7 @@ def t_INTEGER(t):
 
 
 def t_STRING(t):
-  r'\w+([-_+.@]\w*)*'
+  r'\w+([-_+.@/]\w*)*'
   # we have an identifier; let's check if it's a keyword or just a string.
   t.type = reserved.get(t.value, 'STRING')
   return t
@@ -1419,6 +1452,7 @@ def p_term_spec(p):
                 | term_spec protocol_spec
                 | term_spec qos_spec
                 | term_spec routinginstance_spec
+                | term_spec tag_list_spec
                 | term_spec timeout_spec
                 | term_spec traffic_type_spec
                 | term_spec verbatim_spec
@@ -1531,6 +1565,17 @@ def p_protocol_spec(p):
   p[0] = []
   for proto in p[4]:
     p[0].append(VarType(VarType.PROTOCOL, proto))
+
+
+def p_tag_list_spec(p):
+  """ tag_list_spec : DTAG ':' ':' one_or_more_strings
+                    | STAG ':' ':' one_or_more_strings """
+  p[0] = []
+  for tag in p[4]:
+    if p[1].find('source-tag') >= 0:
+      p[0].append(VarType(VarType.STAG, tag))
+    elif p[1].find('destination-tag') >= 0:
+      p[0].append(VarType(VarType.DTAG, tag))
 
 
 def p_ether_type_spec(p):
@@ -1686,6 +1731,23 @@ def p_error(p):
 # pylint: enable-msg=W0613,C6102,C6104,C6105,C6108,C6409
 
 
+def memoize(obj):
+  """Memoize decorator for objects that take args and or kwargs."""
+
+  cache = obj.cache = {}
+
+  @wraps(obj)
+  def memoizer(*args, **kwargs):
+    key = (args, tuple(zip(kwargs.iteritems())))
+    try:
+      return cache[key]
+    except KeyError:
+      value = obj(*args, **kwargs)
+      cache[key] = value
+      return value
+  return memoizer
+
+
 def _ReadFile(filename):
   """Read data from a file if it exists.
 
@@ -1767,6 +1829,19 @@ def ParseFile(filename, definitions=None, optimize=True, base_dir='',
   return p
 
 
+@memoize
+def CacheParseFile(*args, **kwargs):
+  """Same as ParseFile, but cached if possible.
+
+  If this was previously called with same args/kwargs, then just return
+  the previous result from cache.
+
+  See the ParseFile function for signature details.
+  """
+
+  return ParseFile(*args, **kwargs)
+
+
 def ParsePolicy(data, definitions=None, optimize=True, base_dir='',
                 shade_check=False):
   """Parse the policy in 'data', optionally provide a naming object.
@@ -1777,7 +1852,7 @@ def ParsePolicy(data, definitions=None, optimize=True, base_dir='',
     data: a string blob of policy data to parse.
     definitions: optional naming library definitions object.
     optimize: bool - whether to summarize networks and services.
-    base_dir: base path string to look for acls or include files.
+    base_dir: base path string to look for policies or include files.
     shade_check: bool - whether to raise an exception when a term is shaded.
 
   Returns:
@@ -1804,8 +1879,8 @@ def ParsePolicy(data, definitions=None, optimize=True, base_dir='',
     return False
 
 
-# if you call this from the command line, you can specify a jcl file for it to
-# read.
+# If you call this from the command line, you can specify a policy file for it
+# to read.
 if __name__ == '__main__':
   ret = 0
   if len(sys.argv) > 1:
