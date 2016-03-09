@@ -40,6 +40,7 @@ from lib import brocade
 from lib import cisco
 from lib import ciscoasa
 from lib import ciscoxr
+from lib import cisconx
 from lib import gce
 from lib import iptables
 from lib import ipset
@@ -146,6 +147,7 @@ def render_filters(source_file, definitions_obj, shade_check, exp_info):
     'cisco': {'optimized': True, 'renderer': cisco.Cisco},
     'ciscoasa': {'optimized': True, 'renderer': ciscoasa.CiscoASA},
     'ciscoxr': {'optimized': True, 'renderer': ciscoxr.CiscoXR},
+    'cisconx': {'optimized': True, 'renderer':cisconx.CiscoNX},
     'demo': {'optimized': True, 'renderer': demo.Demo},
     'gce': {'optimized': True, 'renderer': gce.GCE},
     'ipset': {'optimized': True, 'renderer': ipset.Ipset},
